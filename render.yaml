@@ -1,0 +1,33 @@
+services:
+  # API Service principale
+  - type: web
+    name: bafoka-whatsapp-api
+    runtime: docker
+    plan: free
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: BAFOKA_API_KEY
+        sync: false
+      - key: BAFOKA_API_BASE_URL
+        value: https://sandbox.bafoka.network
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: bafoka-redis
+          property: connectionString
+      - key: ENVIRONMENT
+        value: production
+      - key: PORT
+        value: 8000
+
+  # Redis Service
+  - type: redis
+    name: bafoka-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru

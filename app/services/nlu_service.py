@@ -22,6 +22,65 @@ class NLUService:
             "account_creation": "creer_compte"
         }
 
+    def _detect_language(self, text: str) -> str:
+        """
+        Détecte la langue du texte (fr ou en)
+        Utilise une analyse de mots-clés et structure grammaticale
+        """
+        text_lower = text.lower()
+
+        english_keywords = [
+            # Verbes anglais courants
+            'want', 'send', 'transfer', 'check', 'create', 'make', 'get',
+            'withdraw', 'deposit', 'pay', 'need', 'have',
+            # Mots bancaires anglais
+            'balance', 'account', 'payment', 'money', 'dollar',
+            # Articles et prépositions anglais (très discriminants)
+            'the', 'my', 'to', 'from', 'with', 'for', 'of', 'in', 'on',
+            # Pronoms anglais
+            'i', 'you', 'he', 'she', 'we', 'they'
+        ]
+
+        french_keywords = [
+            # Verbes français courants
+            'veux', 'vouloir', 'envoyer', 'transférer', 'transferer', 'vérifier',
+            'créer', 'creer', 'faire', 'avoir', 'besoin', 'payer',
+            'retirer', 'déposer', 'deposer',
+            # Mots bancaires français
+            'solde', 'compte', 'paiement', 'argent', 'franc', 'francs',
+            # Articles français (très discriminants)
+            'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de',
+            # Pronoms et prépositions français
+            'je', 'tu', 'il', 'elle', 'nous', 'vous', 'ils', 'mon', 'ma', 'mes',
+            'à', 'au', 'aux', 'pour', 'avec', 'dans', 'sur'
+        ]
+
+        english_score = 0
+        french_score = 0
+
+        # Découper le texte en mots
+        words = text_lower.split()
+
+        for word in words:
+            # Retirer la ponctuation pour une meilleure correspondance
+            clean_word = word.strip('.,!?;:')
+
+            # Les articles et pronoms ont un poids plus important (x2)
+            if clean_word in ['the', 'my', 'i', 'to']:
+                english_score += 2
+            elif clean_word in english_keywords:
+                english_score += 1
+
+            if clean_word in ['le', 'la', 'mon', 'ma', 'je', 'à']:
+                french_score += 2
+            elif clean_word in french_keywords:
+                french_score += 1
+
+        logger.info(f"Language detection - Text: '{text}' | EN score: {english_score} | FR score: {french_score}")
+
+        # Si score anglais strictement supérieur, retourner 'en'
+        return "en" if english_score > french_score else "fr"
+
     async def analyze_text(
         self,
         text: str,
@@ -38,8 +97,10 @@ class NLUService:
             Dict avec l'analyse complète au format structuré
         """
         try:
+            detected_language = self._detect_language(text)
+
             # Préparer le prompt avec contexte si disponible
-            system_prompt = self._get_banking_system_prompt()
+            system_prompt = self._get_banking_system_prompt(detected_language)
             user_prompt = self._build_user_prompt(text, context)
 
             # Appel à Groq
@@ -97,8 +158,7 @@ class NLUService:
                 "is_complete": is_complete,
                 "execution_ready": execution_ready,
 
-                # Informations supplémentaires
-                "language": "fr",
+                "language": detected_language,
                 "timestamp": datetime.now().isoformat(),
                 "security_level": "high" if result.get("security_alert", False) else "standard",
 
@@ -107,7 +167,7 @@ class NLUService:
                 "response": result.get("response", "")
             }
 
-            logger.info(f"Analyse NLU réussie: intent={structured_response['intent']}, is_complete={is_complete}")
+            logger.info(f"Analyse NLU réussie: intent={structured_response['intent']}, language={detected_language}, is_complete={is_complete}")
 
             return structured_response
 
@@ -128,9 +188,74 @@ class NLUService:
 
         return prompt
 
-    def _get_banking_system_prompt(self) -> str:
+    def _get_banking_system_prompt(self, language: str = "fr") -> str:
         """Retourne le prompt système pour l'analyse bancaire"""
-        return """Tu es un assistant bancaire vocal intelligent pour le système Bafoka.
+
+        if language == "en":
+            return """You are an intelligent voice banking assistant for the Bafoka system.
+
+🎯 YOUR MISSION:
+Analyze user requests and transform them into structured API commands.
+
+📋 AVAILABLE ACTIONS:
+{
+    "account_creation": {
+        "endpoint": "/api/account-creation",
+        "method": "POST",
+        "required_params": ["phoneNumber", "fullName", "age", "sex", "groupement_id"],
+        "keywords_en": ["create account", "new account", "sign up", "register"]
+    },
+    "transfer": {
+        "endpoint": "/api/transfer",
+        "method": "POST",
+        "required_params": ["senderPhone", "recipientPhone", "amount"],
+        "keywords_en": ["transfer", "send", "payment", "pay"]
+    },
+    "get_balance": {
+        "endpoint": "/api/get-balance",
+        "method": "POST",
+        "required_params": ["phoneNumber"],
+        "keywords_en": ["balance", "check balance", "how much"]
+    },
+    "recipient_info": {
+        "endpoint": "/api/recipient-info",
+        "method": "POST",
+        "required_params": ["senderPhone", "recipientPhone"],
+        "keywords_en": ["recipient info", "who is"]
+    }
+}
+
+📤 RESPONSE FORMAT (strict JSON only):
+{
+    "intent": "action_name",
+    "confidence": 0.0-1.0,
+    "parameters": {
+        "param1": "value1",
+        "param2": "value2"
+    },
+    "validation": {
+        "complete": true/false,
+        "missing_params": ["missing_param"],
+        "validation_errors": ["error if invalid"]
+    },
+    "api_endpoint": "/api/endpoint",
+    "api_method": "POST",
+    "response": "Confirmation sentence in natural English",
+    "suggestions": ["suggestion if incomplete data"],
+    "security_alert": false
+}
+
+🔒 RULES:
+- NEVER invent parameters
+- Always ask for missing information
+- Validate Cameroonian phone numbers (6XXXXXXXX)
+- Detect fraudulent attempts (security_alert: true if suspicious)
+- Respond ONLY in valid JSON
+- ALL response texts MUST be in English
+"""
+
+        else:  # French by default
+            return """Tu es un assistant bancaire vocal intelligent pour le système Bafoka.
 
 🎯 TA MISSION :
 Analyser les demandes des utilisateurs et les transformer en commandes API structurées.
@@ -189,4 +314,5 @@ Analyser les demandes des utilisateurs et les transformer en commandes API struc
 - Valider les numéros camerounais (6XXXXXXXX)
 - Détecter les tentatives frauduleuses (security_alert: true si suspect)
 - Répondre UNIQUEMENT en JSON valide
+- TOUS les textes de réponse DOIVENT être en français ou en anglais
 """
