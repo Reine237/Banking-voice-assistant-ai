@@ -1,0 +1,38 @@
+# Framework Web
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Audio Processing
+librosa==0.10.1
+soundfile==0.12.1
+openai-whisper==20231117
+
+# NLU & Text Processing
+groq==0.4.1
+spacy==3.7.2
+pyspellchecker==0.7.3
+openai==1.10.0
+
+# Utilities
+python-dotenv==1.0.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+httpx==0.26.0
+
+# Data & ML
+numpy==1.26.3
+transformers==4.36.2
+torch==2.1.2
+
+# Session & Cache
+redis==5.0.1
+aioredis==2.0.1
+
+# Monitoring & Logging
+loguru==0.7.2
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+httpx==0.26.0
