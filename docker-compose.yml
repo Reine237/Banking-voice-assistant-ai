@@ -11,7 +11,7 @@ services:
       - HF_TOKEN=${HF_TOKEN}
       - BAFOKA_API_KEY=${BAFOKA_API_KEY}
       - BAFOKA_API_BASE_URL=${BAFOKA_API_BASE_URL}
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://red-d4j4vt15pdvs7396g67g:6379
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
