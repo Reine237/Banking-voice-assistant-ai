@@ -18,7 +18,7 @@ RUN python -m spacy download fr_core_news_sm
 
 # Copie du code source
 COPY app ./app
-COPY .env.example .env
+#COPY .env.example .env
 
 # Création des dossiers nécessaires avec permissions
 RUN mkdir -p data/audio data/sessions logs && \

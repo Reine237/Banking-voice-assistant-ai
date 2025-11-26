@@ -22,88 +22,62 @@ class NLUService:
             "account_creation": "creer_compte"
         }
 
+    # -------------------------------------------------------------------------
+    # 🔥 NOUVELLE DÉTECTION DE LANGUE — Basée sur Groq uniquement
+    # -------------------------------------------------------------------------
     def _detect_language(self, text: str) -> str:
         """
-        Détecte la langue du texte (fr ou en)
-        Utilise une analyse de mots-clés et structure grammaticale
+        Détection de la langue via Groq (très fiable)
+        Retourne uniquement 'fr' ou 'en'
         """
-        text_lower = text.lower()
+        try:
+            response = self.groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                temperature=0,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Detect the language of this text. "
+                            "Respond ONLY with 'fr' for French or 'en' for English. "
+                            "No other output."
+                        )
+                    },
+                    {"role": "user", "content": text}
+                ],
+            )
 
-        english_keywords = [
-            # Verbes anglais courants
-            'want', 'send', 'transfer', 'check', 'create', 'make', 'get',
-            'withdraw', 'deposit', 'pay', 'need', 'have',
-            # Mots bancaires anglais
-            'balance', 'account', 'payment', 'money', 'dollar',
-            # Articles et prépositions anglais (très discriminants)
-            'the', 'my', 'to', 'from', 'with', 'for', 'of', 'in', 'on',
-            # Pronoms anglais
-            'i', 'you', 'he', 'she', 'we', 'they'
-        ]
+            lang = response.choices[0].message.content.strip().lower()
+            if lang not in ["fr", "en"]:
+                logger.warning(f"Langue inattendue détectée: {lang}. Fallback -> fr")
+                return "fr"
 
-        french_keywords = [
-            # Verbes français courants
-            'veux', 'vouloir', 'envoyer', 'transférer', 'transferer', 'vérifier',
-            'créer', 'creer', 'faire', 'avoir', 'besoin', 'payer',
-            'retirer', 'déposer', 'deposer',
-            # Mots bancaires français
-            'solde', 'compte', 'paiement', 'argent', 'franc', 'francs',
-            # Articles français (très discriminants)
-            'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de',
-            # Pronoms et prépositions français
-            'je', 'tu', 'il', 'elle', 'nous', 'vous', 'ils', 'mon', 'ma', 'mes',
-            'à', 'au', 'aux', 'pour', 'avec', 'dans', 'sur'
-        ]
+            logger.info(f"Langue détectée: {lang} pour le texte: {text}")
+            return lang
 
-        english_score = 0
-        french_score = 0
+        except Exception as e:
+            logger.error(f"Erreur détecteur de langue: {e}")
+            return "fr"
 
-        # Découper le texte en mots
-        words = text_lower.split()
-
-        for word in words:
-            # Retirer la ponctuation pour une meilleure correspondance
-            clean_word = word.strip('.,!?;:')
-
-            # Les articles et pronoms ont un poids plus important (x2)
-            if clean_word in ['the', 'my', 'i', 'to']:
-                english_score += 2
-            elif clean_word in english_keywords:
-                english_score += 1
-
-            if clean_word in ['le', 'la', 'mon', 'ma', 'je', 'à']:
-                french_score += 2
-            elif clean_word in french_keywords:
-                french_score += 1
-
-        logger.info(f"Language detection - Text: '{text}' | EN score: {english_score} | FR score: {french_score}")
-
-        # Si score anglais strictement supérieur, retourner 'en'
-        return "en" if english_score > french_score else "fr"
-
+    # -------------------------------------------------------------------------
+    # 🔥 Analyse complète avec Groq
+    # -------------------------------------------------------------------------
     async def analyze_text(
         self,
         text: str,
         context: Optional[Dict] = None
     ) -> Dict:
-        """
-        Analyse le texte pour extraire l'intention et les paramètres
+        """Analyse le texte pour extraire l'intention et les paramètres"""
 
-        Args:
-            text: Texte à analyser
-            context: Contexte conversationnel (données de session)
-
-        Returns:
-            Dict avec l'analyse complète au format structuré
-        """
         try:
+            # Détection automatique de langue
             detected_language = self._detect_language(text)
 
-            # Préparer le prompt avec contexte si disponible
+            # Construction des prompts
             system_prompt = self._get_banking_system_prompt(detected_language)
             user_prompt = self._build_user_prompt(text, context)
 
-            # Appel à Groq
+            # Appel Groq NLU
             response = self.groq_client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
@@ -114,47 +88,42 @@ class NLUService:
                 temperature=0.1
             )
 
-            # Parser la réponse JSON
+            # JSON strict
             result_text = response.choices[0].message.content
             result = json.loads(result_text)
 
-            # Mapper l'intention
+            # Mapping d'intention bancaires
             if "intent" in result:
                 result["intent"] = self.intent_mapping.get(
                     result["intent"],
                     result["intent"]
                 )
 
+            # Extraction des champs
             validation = result.get("validation", {})
             missing_params = validation.get("missing_params", [])
             validation_errors = validation.get("validation_errors", [])
 
-            # Calculer les statuts
             is_complete = len(missing_params) == 0 and len(validation_errors) == 0
             execution_ready = is_complete and not result.get("security_alert", False)
 
             structured_response = {
-                # Statut principal
                 "success": True,
 
-                # Champs principaux
                 "intent": result.get("intent", "unknown"),
                 "parameters": result.get("parameters", {}),
                 "missing_parameters": missing_params,
                 "api_endpoint": result.get("api_endpoint", ""),
                 "api_method": result.get("api_method", "POST"),
 
-                # Champs textuels
                 "transcription_text": text,
                 "response_text": result.get("response", ""),
 
-                # Métadonnées
                 "confidence": result.get("confidence", 0.0),
                 "security_alert": result.get("security_alert", False),
                 "validation_errors": validation_errors,
                 "suggestions": result.get("suggestions", []),
 
-                # Statuts calculés
                 "is_complete": is_complete,
                 "execution_ready": execution_ready,
 
@@ -162,149 +131,98 @@ class NLUService:
                 "timestamp": datetime.now().isoformat(),
                 "security_level": "high" if result.get("security_alert", False) else "standard",
 
-                # Compatibilité avec l'ancien format
                 "validation": validation,
                 "response": result.get("response", "")
             }
 
-            logger.info(f"Analyse NLU réussie: intent={structured_response['intent']}, language={detected_language}, is_complete={is_complete}")
+            logger.info(
+                f"Analyse NLU OK — intent={structured_response['intent']}, "
+                f"lang={detected_language}, complete={is_complete}"
+            )
 
             return structured_response
 
         except Exception as e:
-            logger.error(f"Erreur lors de l'analyse NLU: {e}")
+            logger.error(f"Erreur analyse NLU: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             }
 
+    # -------------------------------------------------------------------------
     def _build_user_prompt(self, text: str, context: Optional[Dict]) -> str:
-        """Construit le prompt utilisateur avec le contexte"""
+        """Construit le prompt utilisateur avec contexte"""
         prompt = f"Demande: {text}"
 
         if context and context.get("pending_info"):
-            prompt += f"\n\nContexte de la conversation précédente: {json.dumps(context.get('pending_info'), ensure_ascii=False)}"
+            prompt += (
+                f"\n\nContexte conversationnel précédent: "
+                f"{json.dumps(context.get('pending_info'), ensure_ascii=False)}"
+            )
 
         return prompt
 
+    # -------------------------------------------------------------------------
+    # 🔥 Prompts bancaires FR / EN
+    # -------------------------------------------------------------------------
     def _get_banking_system_prompt(self, language: str = "fr") -> str:
-        """Retourne le prompt système pour l'analyse bancaire"""
 
+        # ---------------------- ENGLISH PROMPT --------------------------------
         if language == "en":
-            return """You are an intelligent voice banking assistant for the Bafoka system.
+            return """
+You are an intelligent banking voice assistant for the Bafoka system.
 
 🎯 YOUR MISSION:
-Analyze user requests and transform them into structured API commands.
+Analyze user requests and convert them into structured API instructions.
 
-📋 AVAILABLE ACTIONS:
+📤 OUTPUT FORMAT (STRICT JSON only):
 {
-    "account_creation": {
-        "endpoint": "/api/account-creation",
-        "method": "POST",
-        "required_params": ["phoneNumber", "fullName", "age", "sex", "groupement_id"],
-        "keywords_en": ["create account", "new account", "sign up", "register"]
-    },
-    "transfer": {
-        "endpoint": "/api/transfer",
-        "method": "POST",
-        "required_params": ["senderPhone", "recipientPhone", "amount"],
-        "keywords_en": ["transfer", "send", "payment", "pay"]
-    },
-    "get_balance": {
-        "endpoint": "/api/get-balance",
-        "method": "POST",
-        "required_params": ["phoneNumber"],
-        "keywords_en": ["balance", "check balance", "how much"]
-    },
-    "recipient_info": {
-        "endpoint": "/api/recipient-info",
-        "method": "POST",
-        "required_params": ["senderPhone", "recipientPhone"],
-        "keywords_en": ["recipient info", "who is"]
-    }
-}
-
-📤 RESPONSE FORMAT (strict JSON only):
-{
-    "intent": "action_name",
+    "intent": "action",
     "confidence": 0.0-1.0,
-    "parameters": {
-        "param1": "value1",
-        "param2": "value2"
-    },
+    "parameters": {},
     "validation": {
         "complete": true/false,
-        "missing_params": ["missing_param"],
-        "validation_errors": ["error if invalid"]
+        "missing_params": [],
+        "validation_errors": []
     },
-    "api_endpoint": "/api/endpoint",
+    "api_endpoint": "",
     "api_method": "POST",
-    "response": "Confirmation sentence in natural English",
-    "suggestions": ["suggestion if incomplete data"],
+    "response": "Natural English response",
+    "suggestions": [],
     "security_alert": false
 }
 
 🔒 RULES:
-- NEVER invent parameters
-- Always ask for missing information
+- NEVER invent missing parameters
+- Ask for missing data
 - Validate Cameroonian phone numbers (6XXXXXXXX)
-- Detect fraudulent attempts (security_alert: true if suspicious)
+- Flag suspicious actions (security_alert: true)
 - Respond ONLY in valid JSON
-- ALL response texts MUST be in English
+- Response text MUST be in English
 """
 
-        else:  # French by default
-            return """Tu es un assistant bancaire vocal intelligent pour le système Bafoka.
+        # ---------------------- FRENCH PROMPT --------------------------------
+        return """
+Tu es un assistant vocal bancaire intelligent pour le système Bafoka.
 
 🎯 TA MISSION :
 Analyser les demandes des utilisateurs et les transformer en commandes API structurées.
 
-📋 ACTIONS DISPONIBLES :
-{
-    "account_creation": {
-        "endpoint": "/api/account-creation",
-        "method": "POST",
-        "required_params": ["phoneNumber", "fullName", "age", "sex", "groupement_id"],
-        "keywords_fr": ["créer compte", "nouveau compte", "inscription"]
-    },
-    "transfer": {
-        "endpoint": "/api/transfer",
-        "method": "POST",
-        "required_params": ["senderPhone", "recipientPhone", "amount"],
-        "keywords_fr": ["transférer", "envoyer", "virement", "payer"]
-    },
-    "get_balance": {
-        "endpoint": "/api/get-balance",
-        "method": "POST",
-        "required_params": ["phoneNumber"],
-        "keywords_fr": ["solde", "balance", "combien"]
-    },
-    "recipient_info": {
-        "endpoint": "/api/recipient-info",
-        "method": "POST",
-        "required_params": ["senderPhone", "recipientPhone"],
-        "keywords_fr": ["info destinataire", "qui est"]
-    }
-}
-
 📤 FORMAT DE RÉPONSE (JSON strict uniquement) :
 {
-    "intent": "nom_de_l_action",
+    "intent": "action",
     "confidence": 0.0-1.0,
-    "parameters": {
-        "param1": "valeur1",
-        "param2": "valeur2"
-    },
+    "parameters": {},
     "validation": {
         "complete": true/false,
-        "missing_params": ["param_manquant"],
-        "validation_errors": ["erreur si invalide"]
+        "missing_params": [],
+        "validation_errors": []
     },
-    "api_endpoint": "/api/endpoint",
+    "api_endpoint": "",
     "api_method": "POST",
-    "response": "Phrase de confirmation en français naturel",
-    "suggestions": ["suggestion si données incomplètes"],
+    "response": "Réponse naturelle en français",
+    "suggestions": [],
     "security_alert": false
 }
 
@@ -312,7 +230,7 @@ Analyser les demandes des utilisateurs et les transformer en commandes API struc
 - Ne JAMAIS inventer de paramètres
 - Toujours demander les informations manquantes
 - Valider les numéros camerounais (6XXXXXXXX)
-- Détecter les tentatives frauduleuses (security_alert: true si suspect)
+- Détecter les tentatives frauduleuses
 - Répondre UNIQUEMENT en JSON valide
-- TOUS les textes de réponse DOIVENT être en français ou en anglais
+- Les textes doivent être en français
 """
