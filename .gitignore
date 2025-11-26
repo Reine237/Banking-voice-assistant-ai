@@ -61,7 +61,7 @@ data/sessions/*.json
 *.pth
 *.bin
 *.onnx
-models/
+#models/
 
 # ----------------------------------
 # OS Files
